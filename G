@@ -1,0 +1,110 @@
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import sqlite3
+
+# ================= SOZLAMALAR =================
+BOT_TOKEN = "7776515717:AAGkAFNwwv1kzJCM06rrOR53dHFDZ5uKbuk"
+ADMIN_ID = 7404004312
+MOVIE_CHANNEL_ID = -1003520526997
+FORCE_CHANNELS = ["@Uz_Avto_24"]
+
+# ================= DATABASE =================
+db = sqlite3.connect("movies.db", check_same_thread=False)
+sql = db.cursor()
+
+sql.execute("""
+CREATE TABLE IF NOT EXISTS movies (
+    code TEXT PRIMARY KEY,
+    msg_id INTEGER
+)
+""")
+
+sql.execute("""
+CREATE TABLE IF NOT EXISTS stats (
+    code TEXT,
+    user_id INTEGER
+)
+""")
+db.commit()
+
+# ================= BOT =================
+bot = Client(
+    "kino_bot",
+    bot_token=BOT_TOKEN
+)
+
+# ================= OBUNA TEKSHIRISH =================
+async def check_sub(user_id):
+    for ch in FORCE_CHANNELS:
+        try:
+            member = await bot.get_chat_member(ch, user_id)
+            if member.status in ["left", "kicked"]:
+                return False
+        except:
+            return False
+    return True
+
+# ================= START =================
+@bot.on_message(filters.command("start") & filters.private)
+async def start(_, msg):
+    await msg.reply("🎬 Kino kodini yuboring\n\nMasalan: 123")
+
+# ================= ADMIN PANEL =================
+@bot.on_message(filters.command("admin") & filters.user(ADMIN_ID))
+async def admin(_, msg):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Kino qo‘shish", callback_data="add")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="stat")],
+        [InlineKeyboardButton("🗑 Kino o‘chirish", callback_data="del")]
+    ])
+    await msg.reply("⚙ Admin panel", reply_markup=kb)
+
+# ================= KINO QO‘SHISH =================
+@bot.on_callback_query(filters.regex("add"))
+async def add(_, cb):
+    await cb.message.reply("📥 Kanal postini FORWARD qiling")
+
+@bot.on_message(filters.forwarded & filters.user(ADMIN_ID))
+async def save_movie(_, msg):
+    bot.last_movie = msg.forward_from_message_id
+    await msg.reply("🔢 Endi KINO KODINI yuboring")
+
+@bot.on_message(filters.text & filters.user(ADMIN_ID))
+async def save_code(_, msg):
+    if not msg.text.isdigit(): return
+    sql.execute("INSERT OR REPLACE INTO movies VALUES (?,?)",
+                (msg.text, bot.last_movie))
+    db.commit()
+    await msg.reply("✅ Kino saqlandi")
+
+# ================= KINO YUBORISH =================
+@bot.on_message(filters.text & filters.private & ~filters.user(ADMIN_ID))
+async def send_movie(_, msg):
+    if not await check_sub(msg.from_user.id):
+        kb = [[InlineKeyboardButton("➕ Obuna bo‘lish",
+              url=f"https://t.me/{FORCE_CHANNELS[0][1:]}")]]
+        return await msg.reply("❗ Avval obuna bo‘ling", reply_markup=InlineKeyboardMarkup(kb))
+
+    sql.execute("SELECT msg_id FROM movies WHERE code=?", (msg.text,))
+    r = sql.fetchone()
+    if not r:
+        return await msg.reply("❌ Bu kodga mos kino topilmadi")
+
+    await bot.copy_message(msg.chat.id, MOVIE_CHANNEL_ID, r[0])
+    sql.execute("INSERT INTO stats VALUES (?,?)",
+                (msg.text, msg.from_user.id))
+    db.commit()
+
+# ================= STATISTIKA =================
+@bot.on_callback_query(filters.regex("stat"))
+async def stat(_, cb):
+    sql.execute("SELECT code, COUNT(*) FROM stats GROUP BY code")
+    data = sql.fetchall()
+    text = "📊 Statistika:\n\n"
+    for c, n in data:
+        text += f"{c} — {n} marta\n"
+    await cb.message.reply(text)
+
+# ================= RUN =================
+print("Bot ishga tushdi...")
+bot.run()
